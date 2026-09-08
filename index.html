@@ -471,108 +471,141 @@ async function fetchGlobalIndicator(code){
 
   const result = new Map();
 
-  /*
-    Utilizamos solamente códigos que reconoce
-    la propia base del Banco Mundial.
-  */
+  // Códigos ISO3 del mapa
   const isoCodes = countries
     .map(c => c.cca3)
-    .filter(iso => wbCountryMap.has(iso));
+    .filter(Boolean);
 
-  /*
-    Dividimos los países en grupos pequeños.
-    Así evitamos country/all.
-  */
-  const CHUNK_SIZE = 20;
-  const chunks = [];
+  // Número de consultas simultáneas
+  const BATCH_SIZE = 10;
 
-  for(let i = 0; i < isoCodes.length; i += CHUNK_SIZE){
-    chunks.push(
-      isoCodes.slice(i, i + CHUNK_SIZE)
-    );
-  }
+  const status =
+    document.getElementById('mapMetricStatus');
 
-  const requests = chunks.map(async chunk => {
+  async function fetchOneCountry(iso){
 
-    const countryList = chunk.join(';');
+    const controller =
+      new AbortController();
 
-    const url =
-      `${WB_BASE}/country/${countryList}/indicator/${code}` +
-      `?format=json&mrnev=1&per_page=500`;
-
-    const res = await fetch(url);
-
-    if(!res.ok){
-      throw new Error(
-        `World Bank HTTP ${res.status}`
+    // Si un país tarda más de 8 segundos,
+    // abandonamos solamente esa consulta.
+    const timeout =
+      setTimeout(
+        () => controller.abort(),
+        8000
       );
-    }
 
-    const json = await res.json();
+    try{
 
-    const rows =
-      Array.isArray(json)
-        ? (json[1] || [])
-        : [];
+      const url =
+        `${WB_BASE}/country/${iso}/indicator/${code}` +
+        `?format=json&mrnev=1&per_page=5`;
 
-    rows.forEach(r => {
+      const res =
+        await fetch(
+          url,
+          {signal:controller.signal}
+        );
 
-      const iso = r?.countryiso3code;
+      if(!res.ok){
+        return;
+      }
 
-      if(
-        iso &&
-        iso.length === 3 &&
-        r.value !== null &&
-        r.value !== undefined
-      ){
+      const json =
+        await res.json();
 
-        const previous = result.get(iso);
+      const rows =
+        Array.isArray(json)
+          ? (json[1] || [])
+          : [];
 
-        /*
-          Si hubiera más de un registro,
-          nos quedamos con el más reciente.
-        */
-        if(
-          !previous ||
-          Number(r.date) > Number(previous.date)
-        ){
-          result.set(iso,{
-            value:r.value,
-            date:r.date
-          });
-        }
+      const row =
+        rows.find(
+          r =>
+            r.value !== null &&
+            r.value !== undefined
+        );
+
+      if(row){
+
+        result.set(
+          iso,
+          {
+            value:row.value,
+            date:row.date
+          }
+        );
 
       }
 
-    });
+    }catch(error){
 
-  });
+      /*
+        Un país puede no responder,
+        pero no detenemos todo el mapa.
+      */
 
-  /*
-    Promise.allSettled permite que si falla
-    un grupo de países, los demás sigan funcionando.
-  */
-  const responses =
-    await Promise.allSettled(requests);
+      console.warn(
+        `Sin dato para ${iso}`,
+        error?.name === 'AbortError'
+          ? 'timeout'
+          : error
+      );
 
-  const failures =
-    responses.filter(
-      r => r.status === 'rejected'
+    }finally{
+
+      clearTimeout(timeout);
+
+    }
+
+  }
+
+  // Procesamos los países por lotes
+  for(
+    let i=0;
+    i<isoCodes.length;
+    i+=BATCH_SIZE
+  ){
+
+    const batch =
+      isoCodes.slice(
+        i,
+        i+BATCH_SIZE
+      );
+
+    await Promise.allSettled(
+      batch.map(
+        iso => fetchOneCountry(iso)
+      )
     );
 
-  if(failures.length){
-    console.warn(
-      `${failures.length} grupos no pudieron cargarse`
-    );
+    if(status){
+
+      const processed =
+        Math.min(
+          i+BATCH_SIZE,
+          isoCodes.length
+        );
+
+      status.textContent =
+        `Cargando mapa: ${processed} de ${isoCodes.length} países…`;
+
+    }
+
   }
 
   if(result.size === 0){
+
     throw new Error(
-      'El Banco Mundial no devolvió datos.'
+      'No se pudieron obtener datos del Banco Mundial.'
     );
+
   }
 
-  mapIndicatorCache.set(code,result);
+  mapIndicatorCache.set(
+    code,
+    result
+  );
 
   return result;
 }
