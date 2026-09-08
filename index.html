@@ -464,18 +464,42 @@ async function fetchIndicator(iso3,code){
   return row ? {value:row.value,date:row.date} : null;
 }
 async function fetchGlobalIndicator(code){
-  if(mapIndicatorCache.has(code)) return mapIndicatorCache.get(code);
-  const url=`${WB_BASE}/country/all/indicator/${code}?format=json&mrnev=1&per_page=400`;
-  const res=await fetch(url);
-  if(!res.ok) throw new Error('World Bank '+res.status);
-  const j=await res.json();
-  const rows=Array.isArray(j) ? j[1] || [] : [];
-  const map=new Map();
-  rows.forEach(r=>{
-    if(r && r.countryiso3code && r.countryiso3code.length===3 && r.value!==null && r.value!==undefined){
-      map.set(r.countryiso3code,{value:r.value,date:r.date});
+  if(mapIndicatorCache.has(code)){
+    return mapIndicatorCache.get(code);
+  }
+
+  const url =
+    `${WB_BASE}/country/all/indicator/${code}` +
+    `?format=json&mrv=5&gapfill=Y&per_page=2000`;
+
+  const res = await fetch(url);
+
+  if(!res.ok){
+    throw new Error(`World Bank HTTP ${res.status}`);
+  }
+
+  const j = await res.json();
+  const rows = Array.isArray(j) ? (j[1] || []) : [];
+
+  const map = new Map();
+
+  rows.forEach(r => {
+    const iso = r?.countryiso3code;
+
+    if(
+      iso &&
+      iso.length === 3 &&
+      r.value !== null &&
+      r.value !== undefined &&
+      !map.has(iso)
+    ){
+      map.set(iso,{
+        value:r.value,
+        date:r.date
+      });
     }
   });
+
   mapIndicatorCache.set(code,map);
   return map;
 }
