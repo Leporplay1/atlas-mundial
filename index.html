@@ -464,44 +464,117 @@ async function fetchIndicator(iso3,code){
   return row ? {value:row.value,date:row.date} : null;
 }
 async function fetchGlobalIndicator(code){
+
   if(mapIndicatorCache.has(code)){
     return mapIndicatorCache.get(code);
   }
 
-  const url =
-    `${WB_BASE}/country/all/indicator/${code}` +
-    `?format=json&mrv=5&gapfill=Y&per_page=2000`;
+  const result = new Map();
 
-  const res = await fetch(url);
+  /*
+    Utilizamos solamente códigos que reconoce
+    la propia base del Banco Mundial.
+  */
+  const isoCodes = countries
+    .map(c => c.cca3)
+    .filter(iso => wbCountryMap.has(iso));
 
-  if(!res.ok){
-    throw new Error(`World Bank HTTP ${res.status}`);
+  /*
+    Dividimos los países en grupos pequeños.
+    Así evitamos country/all.
+  */
+  const CHUNK_SIZE = 20;
+  const chunks = [];
+
+  for(let i = 0; i < isoCodes.length; i += CHUNK_SIZE){
+    chunks.push(
+      isoCodes.slice(i, i + CHUNK_SIZE)
+    );
   }
 
-  const j = await res.json();
-  const rows = Array.isArray(j) ? (j[1] || []) : [];
+  const requests = chunks.map(async chunk => {
 
-  const map = new Map();
+    const countryList = chunk.join(';');
 
-  rows.forEach(r => {
-    const iso = r?.countryiso3code;
+    const url =
+      `${WB_BASE}/country/${countryList}/indicator/${code}` +
+      `?format=json&mrnev=1&per_page=500`;
 
-    if(
-      iso &&
-      iso.length === 3 &&
-      r.value !== null &&
-      r.value !== undefined &&
-      !map.has(iso)
-    ){
-      map.set(iso,{
-        value:r.value,
-        date:r.date
-      });
+    const res = await fetch(url);
+
+    if(!res.ok){
+      throw new Error(
+        `World Bank HTTP ${res.status}`
+      );
     }
+
+    const json = await res.json();
+
+    const rows =
+      Array.isArray(json)
+        ? (json[1] || [])
+        : [];
+
+    rows.forEach(r => {
+
+      const iso = r?.countryiso3code;
+
+      if(
+        iso &&
+        iso.length === 3 &&
+        r.value !== null &&
+        r.value !== undefined
+      ){
+
+        const previous = result.get(iso);
+
+        /*
+          Si hubiera más de un registro,
+          nos quedamos con el más reciente.
+        */
+        if(
+          !previous ||
+          Number(r.date) > Number(previous.date)
+        ){
+          result.set(iso,{
+            value:r.value,
+            date:r.date
+          });
+        }
+
+      }
+
+    });
+
   });
 
-  mapIndicatorCache.set(code,map);
-  return map;
+  /*
+    Promise.allSettled permite que si falla
+    un grupo de países, los demás sigan funcionando.
+  */
+  const responses =
+    await Promise.allSettled(requests);
+
+  const failures =
+    responses.filter(
+      r => r.status === 'rejected'
+    );
+
+  if(failures.length){
+    console.warn(
+      `${failures.length} grupos no pudieron cargarse`
+    );
+  }
+
+  if(result.size === 0){
+    throw new Error(
+      'El Banco Mundial no devolvió datos.'
+    );
+  }
+
+  mapIndicatorCache.set(code,result);
+
+  return result;
 }
 async function loadIndicators(iso3){
   if(cache.has(iso3)) return cache.get(iso3);
