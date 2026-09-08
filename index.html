@@ -592,11 +592,14 @@ async function updateMapColors(metricKey,force=false){
     const years=[...values.values()].map(x=>x.date).filter(Boolean).sort().reverse();
     const mostRecentYear=years[0] || 'N/D';
     status.textContent=`Mapa coloreado por ${metric.label} · último año encontrado: ${mostRecentYear}. ${metric.note}`;
-  }catch(err){
-    console.error(err);
-    status.className='status error';
-    status.textContent=`No se pudo cargar el indicador “${metric.label}”. Comprueba tu conexión a Internet.`;
-  }
+ }catch(err){
+  console.error('ERROR AL COLOREAR MAPA:', err);
+
+  status.className='status error';
+
+  status.textContent =
+    `No se pudo colorear el mapa: ${err?.message || String(err)}`;
+}
 }
 async function selectCountry(iso3,force=false){
   if(force) cache.delete(iso3);
